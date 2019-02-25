@@ -230,7 +230,7 @@ function findStartElements(elements: Element[]) {
 
 function formatAddress(address: string) {
     address = address.trim();
-    if (address === "")
+    if (address === "" || address.startsWith("LOT:"))
         return "";
 
     // Pop tokens from the end of the array until a valid suburb name is encountered (allowing
@@ -249,23 +249,28 @@ function formatAddress(address: string) {
     }
 
     if (suburbName === null) {  // suburb name not found (or not recognised)
-        console.log(`The state and post code will not be added because the suburb was not recognised: ${address}`);
-        return address;
+        console.log(`The development application will be ignored because the suburb was not recognised: ${address}`);
+        return "";
     }
 
     // Add the suburb name with its state and post code to the street name.
 
     let streetName = tokens.join(" ").trim();
-    return (streetName + ((streetName === "") ? "" : ", ") + suburbName).trim();
+    address = (streetName + ((streetName === "") ? "" : ", ") + suburbName).trim();
+    if (/^\d,\d\d\d/.test(address))
+        address = address.substring(0, 1) + address.substring(2);  // remove the comma
+    return address;
 }
 
 // Parses the details from the elements associated with a single development application.
 
 function parseApplicationElements(elements: Element[], headingElements, informationUrl: string) {
-    // Determine the left most and top most elements.  These are useful as reference points.
+    // Determine the left most, top most and bottom most elements.  These are useful as reference
+    // points.
 
     let leftmostElement = elements.reduce(((previous, current) => previous === undefined ? current : (current.x < previous.x ? current : previous)), undefined);
     let topmostElement = elements.reduce(((previous, current) => previous === undefined ? current : (current.y < previous.y ? current : previous)), undefined);
+    let bottommostElement = elements.reduce(((previous, current) => previous === undefined ? current : (current.y >= previous.y ? current : previous)), undefined);
     
     // Ensure the elements are sorted by Y co-ordinate and then by X co-ordinate.
 
@@ -286,11 +291,12 @@ function parseApplicationElements(elements: Element[], headingElements, informat
     applicationNumber = applicationNumber.replace(/[Il,]/g, "/");
     console.log(`    Found \"${applicationNumber}\".`);
 
-    // Get the received date.
+    // Get the received date.  Allow for the lodged date and the subject land text to be joined
+    // together into a single element.  For example, "7/02/2019 8 West Terrace TWO WELLS".
 
     let receivedDateBounds: Rectangle = { x: headingElements.lodged.x, y: topmostElement.y, width: headingElements.lodged.width, height: leftmostElement.height * 2 };
-    let receivedDateText = elements.filter(element => getPercentageOfElementInRectangle(element, receivedDateBounds) > 10).map(element => element.text).join("").replace(/\s/g, "");
-    let receivedDate = moment(receivedDateText.trim(), "D/MM/YYYY", true);
+    let receivedDateText = elements.filter(element => getPercentageOfElementInRectangle(element, receivedDateBounds) > 10).map(element => element.text).join("");
+    let receivedDate = moment(receivedDateText.trim().substring(0, "DD/MM/YYYY".length).replace(/\s/g, ""), "D/MM/YYYY", true);
 
     // Get the address and the legal description.
 
@@ -309,8 +315,13 @@ function parseApplicationElements(elements: Element[], headingElements, informat
     }
 
     let address = (addressRows.length < 1) ? "" : addressRows[0].map(element => element.text).join("").trim().replace(/\s\s+/g, " ");
-    address = formatAddress(address);
     let legalDescription = (addressRows.length < 2) ? "" : addressRows[1].map(element => element.text).join("").trim().replace(/\s\s+/g, " ");
+
+    address = address.replace(/^\d\d?\/\d\d\/\d\d\d\d /, "");  // remove any lodged date at the start of the address
+    if (address.trim().startsWith("LOT:") && legalDescription !== "")
+        [ address, legalDescription ] = [ legalDescription, address ];  // swap the address and legal description (this is needed when there are multiple addresses and the first is blank)
+    address = formatAddress(address);
+    
     if (address === "") {
         let elementSummary = elements.map(element => `[${element.text}]`).join("");
         console.log(`Application number ${applicationNumber} will be ignored because an address was not found or parsed.  Elements: ${elementSummary}`);
@@ -319,8 +330,9 @@ function parseApplicationElements(elements: Element[], headingElements, informat
 
     // Get the description.
 
-    let descriptionBounds: Rectangle = { x: headingElements.proposal.x, y: topmostElement.y, width: headingElements.approval.x - headingElements.proposal.x, height: headingElements.conditions.y - topmostElement.y };
-    let description = elements.filter(element => getPercentageOfElementInRectangle(element, descriptionBounds) > 10).map(element => element.text).join("").trim();
+    let height = ((headingElements.conditions === undefined) ? bottommostElement.y : headingElements.conditions.y) - topmostElement.y;
+    let descriptionBounds: Rectangle = { x: headingElements.proposal.x, y: topmostElement.y, width: headingElements.approval.x - headingElements.proposal.x, height: height };
+    let description = elements.filter(element => getPercentageOfElementInRectangle(element, descriptionBounds) > 10).map(element => element.text).join(" ").replace(/\.{3,}/g, " ").trim().replace(/\s\s+/g, " ");
 
     // Construct the resulting application information.
     
@@ -426,20 +438,16 @@ async function parsePdf(url: string) {
 
         // Parse the development application from each group of elements (ie. a section of the
         // current page of the PDF document).  If the same application number is encountered a
-        // second time in the same document then this likely indicates the parsing has incorrectly
-        // recognised some of the digits in the application number.  In this case add a suffix to
-        // the application number so it is unique (and so will be inserted into the database later
-        // instead of being ignored).
+        // second time in the same document then this likely indicates that exactly the same
+        // application has been listed twice.  The duplicate is ignored.
 
         for (let applicationElementGroup of applicationElementGroups) {
             headingElements.approval = applicationElementGroup.startElement;
             headingElements.conditions = applicationElementGroup.elements.find(element => element.text.toLowerCase().replace(/\s/g, "") === "conditions:");
             let developmentApplication = parseApplicationElements(applicationElementGroup.elements, headingElements, url);
             if (developmentApplication !== undefined) {
-                let suffix = 0;
-                let applicationNumber = developmentApplication.applicationNumber;
-                while (developmentApplications.some(otherDevelopmentApplication => otherDevelopmentApplication.applicationNumber === developmentApplication.applicationNumber))
-                    developmentApplication.applicationNumber = `${applicationNumber} (${++suffix})`;  // add a unique suffix
+                if (developmentApplications.some(otherDevelopmentApplication => otherDevelopmentApplication.applicationNumber === developmentApplication.applicationNumber))
+                    continue;  // ignore duplicates
                 developmentApplications.push(developmentApplication);
             }
         }
@@ -510,7 +518,7 @@ async function main() {
     let pdfUrls: string[] = [];
     for (let element of elements) {
         let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
-        if (pdfUrl.toLowerCase().includes(".pdf"))
+        if (pdfUrl.toLowerCase().includes(".pdf") && $(element).text().toLowerCase().includes("report"))
             if (!pdfUrls.some(url => url === pdfUrl))
                 pdfUrls.push(pdfUrl);
     }
@@ -528,15 +536,14 @@ async function main() {
     // at once because this may use too much memory, resulting in morph.io terminating the current
     // process).
 
-    // let selectedPdfUrls: string[] = [];
-    // selectedPdfUrls.push(pdfUrls.shift());
-    // if (pdfUrls.length > 0)
-    //     selectedPdfUrls.push(pdfUrls[getRandom(0, pdfUrls.length)]);
-    // if (getRandom(0, 2) === 0)
-    //     selectedPdfUrls.reverse();
+    let selectedPdfUrls: string[] = [];
+    selectedPdfUrls.push(pdfUrls.pop());
+    if (pdfUrls.length > 0)
+        selectedPdfUrls.push(pdfUrls[getRandom(0, pdfUrls.length)]);
+    if (getRandom(0, 2) === 0)
+        selectedPdfUrls.reverse();
 
-    // for (let pdfUrl of selectedPdfUrls) {
-    for (let pdfUrl of [ "https://www.apc.sa.gov.au/webdata/resources/files/1%20January%20-%2031%20October%202017.pdf" ]) {
+    for (let pdfUrl of selectedPdfUrls) {
         console.log(`Parsing document: ${pdfUrl}`);
         let developmentApplications = await parsePdf(pdfUrl);
         console.log(`Parsed ${developmentApplications.length} development application(s) from document: ${pdfUrl}`);
