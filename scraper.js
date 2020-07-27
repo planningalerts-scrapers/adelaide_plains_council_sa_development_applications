@@ -181,7 +181,7 @@ function formatAddress(address) {
         let suburbNameMatch = didyoumean2_1.default(tokens.slice(-index).join(" "), Object.keys(SuburbNames), { caseSensitive: false, returnType: didyoumean.ReturnTypeEnums.FIRST_CLOSEST_MATCH, thresholdType: didyoumean.ThresholdTypeEnums.EDIT_DISTANCE, threshold: 2, trimSpaces: true });
         if (suburbNameMatch !== null) {
             suburbName = SuburbNames[suburbNameMatch];
-            tokens.splice(-index, index); // remove elements from the end of the array           
+            tokens.splice(-index, index); // remove elements from the end of the array
             break;
         }
     }
