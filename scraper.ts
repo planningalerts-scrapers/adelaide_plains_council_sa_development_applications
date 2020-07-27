@@ -17,7 +17,7 @@ import didYouMean, * as didyoumean from "didyoumean2";
 
 sqlite3.verbose();
 
-const DevelopmentApplicationsUrl = "https://www.apc.sa.gov.au/developmentapplications";
+const DevelopmentApplicationsUrl = "https://www.apc.sa.gov.au/council-services/development/developmentapplications";
 const CommentUrl = "mailto:info@apc.sa.gov.au";
 
 declare const process: any;
@@ -510,13 +510,8 @@ async function main() {
     await sleep(2000 + getRandom(0, 5) * 1000);
     let $ = cheerio.load(body);
 
-    let elements = []
-        .concat($("td.uContentListDesc p a").get())
-        .concat($("td.u6ListTD div.u6ListItem a").get())
-        .concat($("div.unityHtmlArticle p a").get());
-
     let pdfUrls: string[] = [];
-    for (let element of elements) {
+    for (let element of $("h3.generic-list__title a").get()) {
         let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
         if (pdfUrl.toLowerCase().includes(".pdf") && $(element).text().toLowerCase().includes("report"))
             if (!pdfUrls.some(url => url === pdfUrl))
